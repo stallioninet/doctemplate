@@ -14,8 +14,11 @@ dist/
 .env.local
 .env.*.local
 
-# Local file storage (Phase 2 onward)
-storage/
+# Local file storage (Phase 2 onward) — runtime uploads / generated PDFs.
+# Anchored to specific paths so we don't accidentally ignore the source
+# module at apps/backend/src/storage/ (diskStorage, fileStorage, s3Storage).
+/storage/
+/apps/backend/storage/
 
 # Logs
 *.log
