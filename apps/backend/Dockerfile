@@ -16,18 +16,20 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
-# Copy workspace manifests first for Docker layer caching — re-installs only
-# trigger when these files change.
+# Copy workspace manifests + Prisma schema first for Docker layer caching.
+# Schema is needed during `npm install` because the backend's `postinstall`
+# hook runs `prisma generate` — it can't find the schema otherwise.
 COPY package.json package-lock.json ./
 COPY apps/backend/package.json ./apps/backend/
+COPY apps/backend/prisma ./apps/backend/prisma/
 
 # Install backend workspace deps (frontend workspace is skipped). Includes
 # devDeps because we need `prisma`, `tsc` and `@types/*` to build below.
+# `postinstall` hook generates the Prisma client as part of this step.
 RUN npm install --include=dev --workspace=@doctemplate/backend
 
-# Copy backend source + Prisma schema, generate the typed client, compile TS.
+# Copy the rest of the backend source and compile TS.
 COPY apps/backend ./apps/backend
-RUN npm run prisma:generate --workspace=@doctemplate/backend
 RUN npm run build --workspace=@doctemplate/backend
 
 # Persistent storage mount point — Render mounts the 10GB disk here at boot.
