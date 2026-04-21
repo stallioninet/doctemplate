@@ -1,0 +1,20 @@
+{
+  "name": "doctemplate",
+  "version": "0.1.0",
+  "private": true,
+  "workspaces": ["apps/*"],
+  "scripts": {
+    "dev": "npm run dev --workspace=@doctemplate/backend",
+    "dev:backend": "npm run dev --workspace=@doctemplate/backend",
+    "dev:frontend": "npm run dev --workspace=@doctemplate/frontend",
+    "build": "npm run build --workspace=@doctemplate/backend && npm run build --workspace=@doctemplate/frontend",
+    "build:backend": "npm run build --workspace=@doctemplate/backend",
+    "build:frontend": "npm run build --workspace=@doctemplate/frontend",
+    "typecheck": "npm run typecheck --workspace=@doctemplate/backend && npm run typecheck --workspace=@doctemplate/frontend",
+    "prisma:generate": "npm run prisma:generate --workspace=@doctemplate/backend",
+    "prisma:migrate": "npm run prisma:migrate --workspace=@doctemplate/backend"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

@@ -1,0 +1,23 @@
+# Keep Docker build context lean. Anything matching here is excluded from
+# `dockerContext: .` in render.yaml so node_modules / .next / local storage
+# don't bloat the image or leak secrets.
+**/node_modules
+**/dist
+**/.next
+**/.turbo
+**/.cache
+
+# Local-only state — never bake into the image
+**/.env
+**/.env.local
+**/.env.*.local
+**/storage
+
+# VCS + tooling
+.git
+.github
+*.log
+.DS_Store
+
+# Frontend workspace isn't needed in the backend image
+apps/frontend

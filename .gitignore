@@ -1,0 +1,33 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+.next/
+.turbo/
+
+# TypeScript incremental
+*.tsbuildinfo
+
+# Local env (never commit secrets)
+.env
+.env.local
+.env.*.local
+
+# Local file storage (Phase 2 onward)
+storage/
+
+# Logs
+*.log
+npm-debug.log*
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/
+
+# Vercel CLI artifacts
+.vercel/
+
+# code-review-graph local cache (not part of the project)
+.code-review-graph/

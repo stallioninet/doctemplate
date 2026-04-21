@@ -1,0 +1,341 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum DocumentFormat {
+  PDF
+  DOCX
+  RTF
+}
+
+enum DocumentStatus {
+  DRAFT
+  SENT
+  COMPLETED
+  DECLINED
+  VOIDED
+}
+
+enum SignerStatus {
+  PENDING
+  VIEWED
+  SIGNED
+  DECLINED
+}
+
+enum FieldType {
+  SIGNATURE
+  INITIAL
+  DATE
+  TEXT
+  CHECKBOX
+}
+
+enum TemplateMode {
+  HTML
+  PDF
+}
+
+enum PlaceholderType {
+  TEXT
+  DATE
+  NUMBER
+}
+
+enum SigningEventType {
+  DOCUMENT_CREATED
+  DOCUMENT_GENERATED
+  DOCUMENT_SENT
+  SIGNER_VIEWED
+  SIGNER_FIELD_FILLED
+  SIGNER_SIGNED
+  SIGNER_DECLINED
+  DOCUMENT_COMPLETED
+  DOCUMENT_DECLINED
+  DOCUMENT_VOIDED
+  SIGNED_ARTIFACT_GENERATED
+}
+
+enum GenerationJobStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  FAILED
+}
+
+enum GenerationJobKind {
+  RENDER
+  SIGNED_ARTIFACT
+}
+
+enum WebhookDeliveryStatus {
+  PENDING
+  DELIVERED
+  FAILED
+}
+
+enum UserRole {
+  OWNER
+  ADMIN
+  MEMBER
+}
+
+model Organization {
+  id        String   @id @default(uuid())
+  name      String
+  slug      String   @unique
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  users     User[]
+  apiKeys   ApiKey[]
+  templates Template[]
+  documents Document[]
+
+  @@map("organizations")
+}
+
+model User {
+  id             String   @id @default(uuid())
+  organizationId String
+  email          String   @unique
+  passwordHash   String
+  role           UserRole @default(MEMBER)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+
+  @@index([organizationId])
+  @@map("users")
+}
+
+model ApiKey {
+  id             String    @id @default(uuid())
+  organizationId String
+  name           String
+  prefix         String
+  keyHash        String    @unique
+  lastUsedAt     DateTime?
+  revokedAt      DateTime?
+  createdAt      DateTime  @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+
+  @@index([organizationId])
+  @@map("api_keys")
+}
+
+model Template {
+  id                 String          @id @default(uuid())
+  organizationId     String
+  name               String
+  description        String?
+  templateMode       TemplateMode    @default(HTML)
+  htmlContent        String          @db.Text
+  sourceFormat       DocumentFormat?
+  sourceFileKey      String?
+  sourceFileMimeType String?
+  externalId         String?
+  externalSource     String?
+  createdAt          DateTime        @default(now())
+  updatedAt          DateTime        @updatedAt
+
+  organization Organization          @relation(fields: [organizationId], references: [id])
+  documents    Document[]
+  placeholders TemplatePlaceholder[]
+
+  @@unique([organizationId, externalSource, externalId])
+  @@index([organizationId])
+  @@map("templates")
+}
+
+model TemplatePlaceholder {
+  id           String          @id @default(uuid())
+  templateId   String
+  name         String
+  type         PlaceholderType @default(TEXT)
+  page         Int             @default(1)
+  x            Float
+  y            Float
+  width        Float
+  height       Float
+  required     Boolean         @default(true)
+  defaultValue String?
+  createdAt    DateTime        @default(now())
+  updatedAt    DateTime        @updatedAt
+
+  template Template @relation(fields: [templateId], references: [id], onDelete: Cascade)
+
+  @@index([templateId])
+  @@index([templateId, page])
+  @@map("template_placeholders")
+}
+
+model Document {
+  id             String         @id @default(uuid())
+  organizationId String
+  templateId     String
+  name           String
+  format         DocumentFormat
+  htmlContent    String         @db.Text
+  data           Json
+  status         DocumentStatus @default(DRAFT)
+  externalId     String?
+  externalSource String?
+  webhookUrl     String?
+
+  // Generated file (Phase 2)
+  fileKey      String?
+  fileMimeType String?
+  fileSize     Int?
+  generatedAt  DateTime?
+
+  // E-sign lifecycle (Phase 5)
+  sentAt      DateTime?
+  completedAt DateTime?
+  declinedAt  DateTime?
+
+  // Signed artifact + audit certificate (Phase 6)
+  signedFileKey           String?
+  signedFileMimeType      String?
+  signedFileSize          Int?
+  signedFileGeneratedAt   DateTime?
+  certificateFileKey      String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  organization      Organization      @relation(fields: [organizationId], references: [id])
+  template          Template          @relation(fields: [templateId], references: [id])
+  jobs              GenerationJob[]
+  signers           Signer[]
+  fields            DocumentField[]
+  webhookDeliveries WebhookDelivery[]
+  events            SigningEvent[]
+
+  @@unique([organizationId, externalSource, externalId])
+  @@index([organizationId])
+  @@index([templateId])
+  @@index([status])
+  @@map("documents")
+}
+
+model GenerationJob {
+  id          String              @id @default(uuid())
+  documentId  String
+  kind        GenerationJobKind   @default(RENDER)
+  status      GenerationJobStatus @default(PENDING)
+  attempts    Int                 @default(0)
+  maxAttempts Int                 @default(3)
+  lastError   String?
+  startedAt   DateTime?
+  completedAt DateTime?
+  createdAt   DateTime            @default(now())
+  updatedAt   DateTime            @updatedAt
+
+  document   Document          @relation(fields: [documentId], references: [id])
+  deliveries WebhookDelivery[]
+
+  @@index([status, createdAt])
+  @@index([documentId])
+  @@map("generation_jobs")
+}
+
+model Signer {
+  id              String       @id @default(uuid())
+  documentId      String
+  email           String
+  name            String
+  order           Int          @default(0)
+  status          SignerStatus @default(PENDING)
+  accessTokenHash String?      @unique
+  accessSentAt   DateTime?
+  viewedAt        DateTime?
+  signedAt        DateTime?
+  declinedAt      DateTime?
+  declineReason   String?
+  ipAddress       String?
+  userAgent       String?
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+
+  document Document        @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  fields   DocumentField[]
+
+  @@index([documentId])
+  @@index([documentId, order])
+  @@map("signers")
+}
+
+model DocumentField {
+  id         String    @id @default(uuid())
+  documentId String
+  signerId   String
+  type       FieldType
+  page       Int       @default(1)
+  x          Float
+  y          Float
+  width      Float
+  height     Float
+  required   Boolean   @default(true)
+  value      String?   @db.Text
+  filledAt   DateTime?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  document Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  signer   Signer   @relation(fields: [signerId], references: [id], onDelete: Cascade)
+
+  @@index([documentId])
+  @@index([signerId])
+  @@map("document_fields")
+}
+
+model SigningEvent {
+  id         String           @id @default(uuid())
+  documentId String
+  signerId   String?
+  fieldId    String?
+  type       SigningEventType
+  ipAddress  String?
+  userAgent  String?
+  metadata   Json?
+  createdAt  DateTime         @default(now())
+
+  document Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
+
+  @@index([documentId, createdAt])
+  @@index([type])
+  @@map("signing_events")
+}
+
+model WebhookDelivery {
+  id             String                @id @default(uuid())
+  jobId          String?
+  documentId     String?
+  url            String
+  payload        Json
+  status         WebhookDeliveryStatus @default(PENDING)
+  attempts       Int                   @default(0)
+  maxAttempts    Int                   @default(5)
+  lastStatusCode Int?
+  lastError      String?
+  nextAttemptAt  DateTime              @default(now())
+  deliveredAt    DateTime?
+  createdAt      DateTime              @default(now())
+  updatedAt      DateTime              @updatedAt
+
+  job      GenerationJob? @relation(fields: [jobId], references: [id])
+  document Document?      @relation(fields: [documentId], references: [id])
+
+  @@index([status, nextAttemptAt])
+  @@index([jobId])
+  @@index([documentId])
+  @@map("webhook_deliveries")
+}
