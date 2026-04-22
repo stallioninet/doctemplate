@@ -11,7 +11,10 @@
 **/.env
 **/.env.local
 **/.env.*.local
-**/storage
+# Anchor storage/ to runtime locations so the src/storage source module
+# (diskStorage, fileStorage, s3Storage) isn't excluded from the build context.
+/storage
+/apps/backend/storage
 
 # VCS + tooling
 .git
