@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useState, type DragEvent } from 'react';
+import { useCallback, useEffect, useRef, useState, type DragEvent } from 'react';
 import { ApiError, apiFetch, apiUrl } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
 import { pdfjsLib, type PDFDocumentProxy } from '@/lib/pdfjs';
@@ -388,6 +388,50 @@ function PlaceholderDetails({
   onUpdate: (patch: Partial<Placeholder>) => void;
   onDelete: () => void;
 }) {
+  // Controlled drafts so a pending text edit isn't lost when the user clicks
+  // a different placeholder (which unmounts the input before blur fires).
+  const [nameDraft, setNameDraft] = useState(selected?.name ?? '');
+  const [defaultDraft, setDefaultDraft] = useState(selected?.defaultValue ?? '');
+  const draftsRef = useRef({ name: nameDraft, def: defaultDraft });
+  draftsRef.current = { name: nameDraft, def: defaultDraft };
+  const prevSelected = useRef(selected);
+
+  // Flush pending edits when switching selection, then load the new selection's
+  // values. Without the flush, the in-progress rename is silently dropped.
+  useEffect(() => {
+    const prev = prevSelected.current;
+    if (prev && prev.id !== selected?.id) {
+      const { name, def } = draftsRef.current;
+      const patch: Partial<Placeholder> = {};
+      if (name !== prev.name) patch.name = name;
+      if (def !== (prev.defaultValue ?? '')) patch.defaultValue = def || undefined;
+      if (Object.keys(patch).length > 0) {
+        // Fire-and-forget — onUpdate handles errors via the toolbar status pill.
+        onUpdate(patch);
+      }
+    }
+    setNameDraft(selected?.name ?? '');
+    setDefaultDraft(selected?.defaultValue ?? '');
+    prevSelected.current = selected;
+    // onUpdate is stable per render but referentially new each time; ref-flush
+    // logic above means we only need to react to selection changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selected?.id]);
+
+  const dirty =
+    !!selected &&
+    (nameDraft !== selected.name ||
+      defaultDraft !== (selected.defaultValue ?? ''));
+
+  const applyDrafts = () => {
+    if (!selected) return;
+    const patch: Partial<Placeholder> = {};
+    if (nameDraft !== selected.name) patch.name = nameDraft;
+    if (defaultDraft !== (selected.defaultValue ?? ''))
+      patch.defaultValue = defaultDraft || undefined;
+    if (Object.keys(patch).length > 0) onUpdate(patch);
+  };
+
   return (
     <div className="rounded-md border border-slate-200 bg-white p-4 shadow-sm">
       <h3 className="text-sm font-semibold uppercase tracking-wide text-slate-500">
@@ -404,11 +448,15 @@ function PlaceholderDetails({
             <Label htmlFor="sb-ph-name">Name</Label>
             <Input
               id="sb-ph-name"
-              key={`${selected.id}-name`}
-              defaultValue={selected.name}
-              onBlur={(e) =>
-                e.target.value !== selected.name && onUpdate({ name: e.target.value })
-              }
+              value={nameDraft}
+              onChange={(e) => setNameDraft(e.target.value)}
+              onBlur={() => nameDraft !== selected.name && onUpdate({ name: nameDraft })}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault();
+                  applyDrafts();
+                }
+              }}
             />
           </div>
           <div>
@@ -457,12 +505,18 @@ function PlaceholderDetails({
             <Label htmlFor="sb-ph-default">Default value (optional)</Label>
             <Input
               id="sb-ph-default"
-              key={`${selected.id}-default`}
-              defaultValue={selected.defaultValue ?? ''}
-              onBlur={(e) =>
-                e.target.value !== (selected.defaultValue ?? '') &&
-                onUpdate({ defaultValue: e.target.value || undefined })
+              value={defaultDraft}
+              onChange={(e) => setDefaultDraft(e.target.value)}
+              onBlur={() =>
+                defaultDraft !== (selected.defaultValue ?? '') &&
+                onUpdate({ defaultValue: defaultDraft || undefined })
               }
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault();
+                  applyDrafts();
+                }
+              }}
             />
           </div>
 
@@ -473,9 +527,14 @@ function PlaceholderDetails({
             <Coord label="h" value={selected.height} />
           </div>
 
-          <Button variant="danger" onClick={onDelete} className="w-full" disabled={busy}>
-            Delete placeholder
-          </Button>
+          <div className="space-y-2 pt-2">
+            <Button onClick={applyDrafts} className="w-full" disabled={busy || !dirty}>
+              {dirty ? 'Save changes' : 'Saved'}
+            </Button>
+            <Button variant="danger" onClick={onDelete} className="w-full" disabled={busy}>
+              Delete placeholder
+            </Button>
+          </div>
         </div>
       )}
     </div>
