@@ -3,6 +3,8 @@ import type { GenerationJobKind } from '@prisma/client';
 import { env } from '../../config/env';
 import { documentEngine } from '../../engine/documentEngine';
 import { getAdapter } from '../../engine/adapters';
+import { fillDocxBookmarks } from '../../engine/docxBookmarks';
+import { convertDocxToPdf, fillDocxWithValues } from '../../engine/docxFidelity';
 import { stampPlaceholderValuesOnPdf } from '../../engine/placeholderRender';
 import {
   buildCertificate,
@@ -81,7 +83,54 @@ export const generationJobService = {
     if (!template) throw new Error(`Template ${doc.templateId} not found`);
 
     let generated: { key: string; mimeType: string; size: number; extension: string };
-    if (template.templateMode === 'PDF') {
+    // Drupal-ingested DOCX templates store the .docx at sourceFileKey; UI
+    // uploads keep the .docx at originalFileKey alongside the PDF facsimile.
+    // Prefer the dedicated original key so PDF-stamping templates (which
+    // also live at sourceFileKey) aren't accidentally treated as DOCX.
+    const docxSourceKey =
+      template.sourceFormat === 'DOCX'
+        ? template.originalFileKey ?? template.sourceFileKey
+        : null;
+    if (docxSourceKey && (doc.format === 'DOCX' || doc.format === 'PDF')) {
+      // High-fidelity DOCX path: fill the original .docx directly so Word's
+      // layout (fonts, margins, alignment, tables, sections, headers/footers,
+      // page breaks) is preserved exactly. For PDF output, hand the filled
+      // DOCX to LibreOffice headless, which renders OOXML with near-Word
+      // fidelity — a much better facsimile than the mammoth→HTML→Chromium
+      // path that flattens most of Word's layout metadata.
+      const sourceBytes = await fileStorage.read(docxSourceKey);
+      // Two-stage fill: first replace Word bookmark ranges with values
+      // (auto-detected at upload time, surfaced as BOOKMARK placeholders),
+      // then run docxtemplater to substitute any {{var}} markers the author
+      // wrote inline. Templates can use either style or both.
+      const values = doc.data as Record<string, unknown>;
+      const bookmarkValues: Record<string, unknown> = {};
+      for (const ph of template.placeholders) {
+        if (ph.kind !== 'BOOKMARK') continue;
+        const v = values[ph.name];
+        bookmarkValues[ph.name] = v == null || v === '' ? ph.defaultValue ?? '' : v;
+      }
+      const afterBookmarks = await fillDocxBookmarks(sourceBytes, bookmarkValues);
+      const filledDocx = await fillDocxWithValues(afterBookmarks, values);
+
+      if (doc.format === 'DOCX') {
+        const mimeType =
+          'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+        const key = `generated/${doc.id}/render-${Date.now()}.docx`;
+        const saved = await fileStorage.save(filledDocx, key, mimeType);
+        generated = { key: saved.key, mimeType, size: saved.size, extension: 'docx' };
+      } else {
+        const pdfBytes = await convertDocxToPdf(filledDocx);
+        const key = `generated/${doc.id}/render-${Date.now()}.pdf`;
+        const saved = await fileStorage.save(pdfBytes, key, 'application/pdf');
+        generated = {
+          key: saved.key,
+          mimeType: 'application/pdf',
+          size: saved.size,
+          extension: 'pdf',
+        };
+      }
+    } else if (template.templateMode === 'PDF') {
       if (!template.sourceFileKey) {
         throw new AppError(500, 'PDF template has no source file', 'NO_SOURCE_FILE');
       }

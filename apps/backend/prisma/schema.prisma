@@ -47,6 +47,13 @@ enum PlaceholderType {
   NUMBER
 }
 
+enum PlaceholderKind {
+  // Visually-positioned rectangle on a PDF page (the "draw a box" editor).
+  COORD
+  // Word bookmark in a .docx — substituted by replacing the bookmarked range.
+  BOOKMARK
+}
+
 enum SigningEventType {
   DOCUMENT_CREATED
   DOCUMENT_GENERATED
@@ -141,6 +148,10 @@ model Template {
   sourceFormat       DocumentFormat?
   sourceFileKey      String?
   sourceFileMimeType String?
+  // For DOCX uploads via the UI we keep the original .docx alongside the
+  // PDF facsimile at sourceFileKey, so the high-fidelity DOCX render path
+  // can fill the original Word file when a Word output is requested.
+  originalFileKey    String?
   externalId         String?
   externalSource     String?
   createdAt          DateTime        @default(now())
@@ -160,11 +171,12 @@ model TemplatePlaceholder {
   templateId   String
   name         String
   type         PlaceholderType @default(TEXT)
+  kind         PlaceholderKind @default(COORD)
   page         Int             @default(1)
-  x            Float
-  y            Float
-  width        Float
-  height       Float
+  x            Float           @default(0)
+  y            Float           @default(0)
+  width        Float           @default(0)
+  height       Float           @default(0)
   required     Boolean         @default(true)
   defaultValue String?
   createdAt    DateTime        @default(now())

@@ -30,6 +30,7 @@ interface TemplateOption {
   id: string;
   name: string;
   templateMode: 'HTML' | 'PDF';
+  sourceFormat: 'PDF' | 'DOCX' | 'RTF' | null;
 }
 
 interface Placeholder {
@@ -56,6 +57,11 @@ export default function DocumentsPage() {
 
   const selectedTemplate = templates.data?.find((t) => t.id === templateId);
   const isPdfTemplate = selectedTemplate?.templateMode === 'PDF';
+  // PDF-source uploaded templates can only emit PDF; DOCX-source uploaded
+  // templates can emit DOCX (the worker fills the original .docx) or PDF
+  // (LibreOffice renders the filled docx). HTML templates are always free-choice.
+  const isPdfOnlyTemplate =
+    isPdfTemplate && selectedTemplate?.sourceFormat !== 'DOCX';
 
   const placeholders = useApi<Placeholder[]>(
     isPdfTemplate ? `/api/templates/${templateId}/placeholders` : null,
@@ -64,6 +70,12 @@ export default function DocumentsPage() {
   const onTemplateChange = (id: string) => {
     setTemplateId(id);
     setPlaceholderValues({});
+    // Default the output format to the template's source so a Word template
+    // naturally produces a Word document (the worker fills the original .docx
+    // for an exact Word-fidelity render).
+    const picked = templates.data?.find((t) => t.id === id);
+    if (picked?.sourceFormat === 'DOCX') setFormat('DOCX');
+    else if (picked?.sourceFormat === 'PDF') setFormat('PDF');
   };
 
   const onSubmit = async (e: FormEvent) => {
@@ -86,7 +98,9 @@ export default function DocumentsPage() {
         return;
       }
       data = { ...placeholderValues };
-      effectiveFormat = 'PDF';
+      // Only PDF-source uploads are locked to PDF — DOCX uploads honor the
+      // user's pick so Word in → Word out is the default outcome.
+      if (isPdfOnlyTemplate) effectiveFormat = 'PDF';
     } else {
       try {
         data = JSON.parse(dataJson || '{}');
@@ -159,7 +173,7 @@ export default function DocumentsPage() {
                   onChange={(e) => setName(e.target.value)}
                 />
               </div>
-              {!isPdfTemplate && (
+              {!isPdfOnlyTemplate && (
                 <div>
                   <Label htmlFor="d-format">Output format</Label>
                   <select
@@ -170,15 +184,15 @@ export default function DocumentsPage() {
                   >
                     <option value="PDF">PDF</option>
                     <option value="DOCX">DOCX</option>
-                    <option value="RTF">RTF</option>
+                    {!isPdfTemplate && <option value="RTF">RTF</option>}
                   </select>
                 </div>
               )}
-              {isPdfTemplate && (
+              {isPdfOnlyTemplate && (
                 <div>
                   <Label>Output format</Label>
                   <p className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-600">
-                    PDF (forced for PDF templates)
+                    PDF (source is a PDF)
                   </p>
                 </div>
               )}

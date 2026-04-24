@@ -1,5 +1,5 @@
 import { randomUUID } from 'crypto';
-import type { DocumentFormat } from '@prisma/client';
+import { DocumentFormat } from '@prisma/client';
 import { AppError, NotFoundError } from '../../utils/errors';
 import { extractVariables, renderTemplate } from '../../utils/templateEngine';
 import { fileStorage } from '../../storage/fileStorage';
@@ -79,11 +79,20 @@ export const ingestionService = {
 
     const htmlContent = renderTemplate(template.htmlContent, input.values);
 
+    // Default output to the source format so a Word template produces a Word
+    // document (exact layout preserved by the DOCX fidelity path). RTF
+    // sources fall back to PDF since Drupal's contract is PDF|DOCX only.
+    const outputFormat: DocumentFormat =
+      input.outputFormat ??
+      (template.sourceFormat === DocumentFormat.DOCX
+        ? DocumentFormat.DOCX
+        : DocumentFormat.PDF);
+
     const document = await documentRepository.create({
       organizationId,
       templateId: template.id,
       name: input.name,
-      format: input.outputFormat as DocumentFormat,
+      format: outputFormat,
       htmlContent,
       data: input.values,
       externalId: input.externalId,

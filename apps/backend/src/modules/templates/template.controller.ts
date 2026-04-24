@@ -1,7 +1,7 @@
 import type { Request, Response } from 'express';
 import { ValidationError } from '../../utils/errors';
 import { getAuth } from '../auth/auth.types';
-import { uploadTemplateSchema } from './template.schema';
+import { replaceTextSchema, uploadTemplateSchema } from './template.schema';
 import { templateService } from './template.service';
 
 export const templateController = {
@@ -44,5 +44,19 @@ export const templateController = {
     const auth = getAuth(req);
     const templates = await templateService.list(auth.organizationId);
     res.json(templates);
+  },
+
+  async replaceText(req: Request, res: Response) {
+    const auth = getAuth(req);
+    const parsed = replaceTextSchema.safeParse(req.body);
+    if (!parsed.success) {
+      throw new ValidationError('Invalid replace-text body', parsed.error.issues);
+    }
+    const result = await templateService.replacePlaceholderText(
+      auth.organizationId,
+      req.params.id!,
+      parsed.data,
+    );
+    res.json(result);
   },
 };

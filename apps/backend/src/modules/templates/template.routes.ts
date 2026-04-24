@@ -30,6 +30,7 @@ templateRouter.post(
 templateRouter.get('/', asyncHandler(templateController.list));
 templateRouter.get('/:id', asyncHandler(templateController.getById));
 templateRouter.get('/:id/file', asyncHandler(templateController.streamSourceFile));
+templateRouter.post('/:id/replace-text', asyncHandler(templateController.replaceText));
 
 // Nested placeholders sub-resource (req.params.templateId via mergeParams).
 templateRouter.use('/:templateId/placeholders', placeholderRouter);

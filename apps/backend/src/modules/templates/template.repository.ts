@@ -15,6 +15,8 @@ export interface CreateUploadedTemplateData {
   description?: string;
   sourceFileKey: string;
   sourceFileMimeType: string;
+  sourceFormat: DocumentFormat;
+  originalFileKey?: string | null;
 }
 
 export const templateRepository = {
@@ -34,9 +36,10 @@ export const templateRepository = {
         // PDF templates don't use htmlContent — store an empty string so the
         // NOT NULL column stays satisfied without making it nullable.
         htmlContent: '',
-        sourceFormat: 'PDF',
+        sourceFormat: data.sourceFormat,
         sourceFileKey: data.sourceFileKey,
         sourceFileMimeType: data.sourceFileMimeType,
+        originalFileKey: data.originalFileKey ?? null,
       },
     });
   },

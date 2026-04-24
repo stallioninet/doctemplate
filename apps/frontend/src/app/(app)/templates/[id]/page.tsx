@@ -10,11 +10,19 @@ const PdfPlaceholderEditor = dynamic(
   { ssr: false, loading: () => <p className="text-sm text-slate-500">Loading editor…</p> },
 );
 
+// pdfjs-dist requires browser globals (canvas, Worker) so this view must
+// stay client-only — same reason PdfPlaceholderEditor is dynamically imported.
+const DocxBookmarkView = dynamic(() => import('@/components/DocxBookmarkView'), {
+  ssr: false,
+  loading: () => <p className="text-sm text-slate-500">Loading preview…</p>,
+});
+
 interface TemplateDetail {
   id: string;
   name: string;
   description: string | null;
   templateMode: 'HTML' | 'PDF';
+  sourceFormat: 'PDF' | 'DOCX' | 'RTF' | null;
   htmlContent: string;
   variables: string[];
   sourceFileMimeType: string | null;
@@ -47,7 +55,14 @@ export default function TemplateDetailPage({
       </div>
 
       {data.templateMode === 'PDF' ? (
-        <PdfPlaceholderEditor templateId={data.id} />
+        // DOCX uploads use Word bookmarks (auto-detected at upload) instead
+        // of visually-placed rectangles — bookmarks survive into the .docx
+        // output verbatim, while rectangles only make sense for PDF stamping.
+        data.sourceFormat === 'DOCX' ? (
+          <DocxBookmarkView templateId={data.id} />
+        ) : (
+          <PdfPlaceholderEditor templateId={data.id} />
+        )
       ) : (
         <HtmlTemplateView template={data} />
       )}

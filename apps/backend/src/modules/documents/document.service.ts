@@ -33,12 +33,20 @@ export const documentService = {
     const template = await templateRepository.findById(organizationId, input.templateId);
     if (!template) throw new NotFoundError('Template');
 
-    // PDF-mode templates: format is forced to PDF (the source is already a
-    // PDF) and no HTML render happens — the worker stamps placeholder
-    // values onto the source PDF directly at generation time.
-    const isPdfTemplate = template.templateMode === 'PDF';
-    const format = isPdfTemplate ? 'PDF' : input.format;
-    const htmlContent = isPdfTemplate ? '' : renderTemplate(template.htmlContent, input.data);
+    // Uploaded templates (templateMode='PDF') don't run an HTML render — the
+    // worker either stamps the source PDF directly or fills the original
+    // .docx. PDF-source templates can only emit PDF; DOCX-source templates
+    // honor whatever the user picked (worker fills the .docx and renders to
+    // PDF via LibreOffice when format=PDF, otherwise returns the filled docx).
+    const isUploadedTemplate = template.templateMode === 'PDF';
+    const format = isUploadedTemplate
+      ? template.sourceFormat === 'DOCX'
+        ? input.format
+        : 'PDF'
+      : input.format;
+    const htmlContent = isUploadedTemplate
+      ? ''
+      : renderTemplate(template.htmlContent, input.data);
 
     const doc = await documentRepository.create({
       organizationId,
