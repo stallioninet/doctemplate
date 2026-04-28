@@ -83,26 +83,17 @@ export const generationJobService = {
     if (!template) throw new Error(`Template ${doc.templateId} not found`);
 
     let generated: { key: string; mimeType: string; size: number; extension: string };
-    // Drupal-ingested DOCX templates store the .docx at sourceFileKey; UI
-    // uploads keep the .docx at originalFileKey alongside the PDF facsimile.
-    // Prefer the dedicated original key so PDF-stamping templates (which
-    // also live at sourceFileKey) aren't accidentally treated as DOCX.
-    const docxSourceKey =
+    // For UI-uploaded DOCX templates, sourceFileKey is the empty-DOCX → PDF
+    // facsimile and originalFileKey is the raw .docx. DOCX output still needs
+    // the OOXML-fill path because we can't synthesise a .docx from a stamped
+    // PDF. Drupal-ingested DOCX (originalFileKey null, sourceFileKey is .docx)
+    // also needs OOXML fill for DOCX output.
+    const docxOriginalKey =
       template.sourceFormat === 'DOCX'
         ? template.originalFileKey ?? template.sourceFileKey
         : null;
-    if (docxSourceKey && (doc.format === 'DOCX' || doc.format === 'PDF')) {
-      // High-fidelity DOCX path: fill the original .docx directly so Word's
-      // layout (fonts, margins, alignment, tables, sections, headers/footers,
-      // page breaks) is preserved exactly. For PDF output, hand the filled
-      // DOCX to LibreOffice headless, which renders OOXML with near-Word
-      // fidelity — a much better facsimile than the mammoth→HTML→Chromium
-      // path that flattens most of Word's layout metadata.
-      const sourceBytes = await fileStorage.read(docxSourceKey);
-      // Two-stage fill: first replace Word bookmark ranges with values
-      // (auto-detected at upload time, surfaced as BOOKMARK placeholders),
-      // then run docxtemplater to substitute any {{var}} markers the author
-      // wrote inline. Templates can use either style or both.
+    if (docxOriginalKey && doc.format === 'DOCX') {
+      const sourceBytes = await fileStorage.read(docxOriginalKey);
       const values = doc.data as Record<string, unknown>;
       const bookmarkValues: Record<string, unknown> = {};
       for (const ph of template.placeholders) {
@@ -112,25 +103,17 @@ export const generationJobService = {
       }
       const afterBookmarks = await fillDocxBookmarks(sourceBytes, bookmarkValues);
       const filledDocx = await fillDocxWithValues(afterBookmarks, values);
-
-      if (doc.format === 'DOCX') {
-        const mimeType =
-          'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
-        const key = `generated/${doc.id}/render-${Date.now()}.docx`;
-        const saved = await fileStorage.save(filledDocx, key, mimeType);
-        generated = { key: saved.key, mimeType, size: saved.size, extension: 'docx' };
-      } else {
-        const pdfBytes = await convertDocxToPdf(filledDocx);
-        const key = `generated/${doc.id}/render-${Date.now()}.pdf`;
-        const saved = await fileStorage.save(pdfBytes, key, 'application/pdf');
-        generated = {
-          key: saved.key,
-          mimeType: 'application/pdf',
-          size: saved.size,
-          extension: 'pdf',
-        };
-      }
+      const mimeType =
+        'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+      const key = `generated/${doc.id}/render-${Date.now()}.docx`;
+      const saved = await fileStorage.save(filledDocx, key, mimeType);
+      generated = { key: saved.key, mimeType, size: saved.size, extension: 'docx' };
     } else if (template.templateMode === 'PDF') {
+      // PDF output for any uploaded template (native PDF or DOCX). For DOCX
+      // templates, sourceFileKey is the empty-DOCX → PDF facsimile produced
+      // at upload by LibreOffice — stamping values onto that PDF preserves
+      // Word's exact layout, fonts, images, headers/footers, and page breaks
+      // because the canvas is never re-flowed.
       if (!template.sourceFileKey) {
         throw new AppError(500, 'PDF template has no source file', 'NO_SOURCE_FILE');
       }
@@ -213,14 +196,16 @@ export const generationJobService = {
 
     let originalHash: { sha256: string; size: number } | null = null;
     let pdfBuffer: Buffer;
-    if (doc.format === 'PDF' && doc.fileKey) {
-      // Phase 9: load the original PDF, stamp filled fields at their saved
-      // page-relative positions, then append the certification appendix as
-      // a separate page set so the overlays land on the real document
-      // pages rather than a re-rendered HTML facsimile.
-      const originalBytes = await fileStorage.read(doc.fileKey);
-      originalHash = { sha256: sha256Hex(originalBytes), size: originalBytes.length };
-      const overlaidBuffer = await stampFieldsOnPdf(originalBytes, fields);
+    if (doc.fileKey && (doc.format === 'PDF' || doc.format === 'DOCX')) {
+      // Load the rendered document. PDFs are used as-is; DOCX output is
+      // converted via LibreOffice so the canvas keeps Word's layout, fonts,
+      // images, and headers/footers. Fields are then stamped at their saved
+      // page-relative positions and the certification appendix is appended.
+      const renderedBytes = await fileStorage.read(doc.fileKey);
+      originalHash = { sha256: sha256Hex(renderedBytes), size: renderedBytes.length };
+      const canvasBytes =
+        doc.format === 'PDF' ? renderedBytes : await convertDocxToPdf(renderedBytes);
+      const overlaidBuffer = await stampFieldsOnPdf(canvasBytes, fields);
       const appendixHtml = buildCertificationAppendixHtml({ document: doc, signers, fields, events });
       const appendixBuffer = await adapter.generate(appendixHtml, {
         documentId: doc.id,
@@ -228,8 +213,8 @@ export const generationJobService = {
       });
       pdfBuffer = await mergePdfs([overlaidBuffer, appendixBuffer]);
     } else {
-      // Phase 6 fallback for DOCX/RTF originals (or PDFs that were never
-      // generated): re-render document body + appendix together as one PDF.
+      // Fallback for documents without a rendered file (e.g. legacy RTF):
+      // re-render body + appendix together as one PDF.
       const signedHtml = buildSignedHtml({ document: doc, signers, fields, events });
       pdfBuffer = await adapter.generate(signedHtml, {
         documentId: doc.id,

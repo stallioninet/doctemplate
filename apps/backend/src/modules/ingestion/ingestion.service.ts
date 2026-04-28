@@ -1,5 +1,6 @@
 import { randomUUID } from 'crypto';
 import { DocumentFormat } from '@prisma/client';
+import { convertDocxToPdf } from '../../engine/docxFidelity';
 import { AppError, NotFoundError } from '../../utils/errors';
 import { extractVariables, renderTemplate } from '../../utils/templateEngine';
 import { fileStorage } from '../../storage/fileStorage';
@@ -13,6 +14,10 @@ import type {
 } from './ingestion.schema';
 
 export const EXTERNAL_SOURCE = 'drupal';
+
+const PDF_MIME = 'application/pdf';
+const DOCX_MIME =
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
 
 const buildSourceKey = (originalName: string): string => {
   const safe = originalName.replace(/[^\w.\-]+/g, '_');
@@ -37,8 +42,33 @@ export const ingestionService = {
     const parser = getParserForFormat(format)!;
     const { html } = await parser.parse(file.buffer);
 
-    const sourceKey = buildSourceKey(file.originalname);
-    await fileStorage.save(file.buffer, sourceKey, file.mimetype);
+    // Match templateUpload.ts: store a PDF facsimile at sourceFileKey so the
+    // visual editor and the positional-stamp render path can use it as a
+    // stable layout canvas. Keep the original .docx at originalFileKey for
+    // DOCX-output rendering via the OOXML-fill path.
+    let sourceKey: string;
+    let storedMime: string;
+    let originalFileKey: string | null = null;
+    let templateMode: 'PDF' | 'HTML' = 'HTML';
+    if (format === DocumentFormat.DOCX) {
+      const pdfBytes = await convertDocxToPdf(file.buffer);
+      sourceKey = buildSourceKey(file.originalname.replace(/\.[^.]+$/, '.pdf'));
+      storedMime = PDF_MIME;
+      await fileStorage.save(pdfBytes, sourceKey, PDF_MIME);
+      const docxKey = buildSourceKey(file.originalname);
+      await fileStorage.save(file.buffer, docxKey, DOCX_MIME);
+      originalFileKey = docxKey;
+      templateMode = 'PDF';
+    } else if (format === DocumentFormat.PDF) {
+      sourceKey = buildSourceKey(file.originalname);
+      storedMime = PDF_MIME;
+      await fileStorage.save(file.buffer, sourceKey, file.mimetype);
+      templateMode = 'PDF';
+    } else {
+      sourceKey = buildSourceKey(file.originalname);
+      storedMime = file.mimetype;
+      await fileStorage.save(file.buffer, sourceKey, file.mimetype);
+    }
 
     const template = await templateRepository.upsertByExternalId(
       organizationId,
@@ -50,6 +80,9 @@ export const ingestionService = {
         htmlContent: html,
         sourceFormat: format,
         sourceFileKey: sourceKey,
+        sourceFileMimeType: storedMime,
+        originalFileKey,
+        templateMode,
       },
     );
 

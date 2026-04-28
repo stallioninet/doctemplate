@@ -1,4 +1,4 @@
-import type { DocumentFormat, Template } from '@prisma/client';
+import type { DocumentFormat, Template, TemplateMode } from '@prisma/client';
 import { prisma } from '../../db/prisma';
 import type { CreateTemplateInput } from './template.schema';
 
@@ -8,6 +8,9 @@ export interface UpsertTemplateData {
   htmlContent: string;
   sourceFormat?: DocumentFormat;
   sourceFileKey?: string;
+  sourceFileMimeType?: string;
+  originalFileKey?: string | null;
+  templateMode?: TemplateMode;
 }
 
 export interface CreateUploadedTemplateData {
