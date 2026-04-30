@@ -67,22 +67,51 @@ const replaceInPart = (
   const nodes = indexTextNodes(xml);
   if (nodes.length === 0) return { xml, matches: 0 };
 
-  // Build concatenated text and per-node start offsets.
+  // Build concatenated text and per-node start offsets. When two adjacent
+  // text nodes are separated in the source by a structural break (paragraph
+  // end, tab, line break, table cell/row end), insert a sentinel char so the
+  // word-boundary check can't treat the next node's leading character as
+  // adjacent to this node's trailing character. The sentinel is a non-word
+  // codepoint that won't appear in real text and won't satisfy `indexOf`
+  // contiguity, so it can't introduce phantom matches.
+  const STRUCTURAL_BREAK = /<\/w:p>|<\/w:tc>|<\/w:tr>|<w:tab\b|<w:br\b/;
+  const SENTINEL = '';
   const offsets: number[] = [];
   let combined = '';
-  for (const n of nodes) {
+  for (let i = 0; i < nodes.length; i++) {
+    if (i > 0) {
+      const gap = xml.slice(nodes[i - 1]!.fullEnd, nodes[i]!.fullStart);
+      if (STRUCTURAL_BREAK.test(gap)) combined += SENTINEL;
+    }
     offsets.push(combined.length);
-    combined += n.text;
+    combined += nodes[i]!.text;
   }
 
-  // Locate every occurrence (non-overlapping).
+  // Locate every occurrence (non-overlapping). Word-boundary check rejects
+  // substring matches like `name` inside `names` or `username`: when the
+  // search edge is a word character (A-Z a-z 0-9 _), the adjacent context
+  // character must be a non-word character (or the string boundary). If the
+  // search edge is itself non-word (e.g. `[NAME]`), the boundary is intrinsic
+  // and the context character is irrelevant.
+  const isWordChar = (ch: string | undefined): boolean =>
+    ch !== undefined && /[A-Za-z0-9_]/.test(ch);
+  const leftEdgeIsWord = isWordChar(search[0]);
+  const rightEdgeIsWord = isWordChar(search[search.length - 1]);
   const matches: { start: number; end: number }[] = [];
   let from = 0;
   while (true) {
     const idx = combined.indexOf(search, from);
     if (idx === -1) break;
-    matches.push({ start: idx, end: idx + search.length });
-    from = idx + search.length;
+    const before = idx > 0 ? combined[idx - 1] : undefined;
+    const after = combined[idx + search.length];
+    const leftBoundary = !leftEdgeIsWord || !isWordChar(before);
+    const rightBoundary = !rightEdgeIsWord || !isWordChar(after);
+    if (leftBoundary && rightBoundary) {
+      matches.push({ start: idx, end: idx + search.length });
+      from = idx + search.length;
+    } else {
+      from = idx + 1;
+    }
   }
   if (matches.length === 0) return { xml, matches: 0 };
 

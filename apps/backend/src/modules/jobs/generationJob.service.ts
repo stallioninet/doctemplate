@@ -92,7 +92,13 @@ export const generationJobService = {
       template.sourceFormat === 'DOCX'
         ? template.originalFileKey ?? template.sourceFileKey
         : null;
-    if (docxOriginalKey && doc.format === 'DOCX') {
+    if (docxOriginalKey) {
+      // DOCX template — fill the original .docx first so {{tag}} tokens and
+      // Word bookmarks are substituted in their natural document flow, then
+      // either save the .docx directly (DOCX output) or convert to PDF and
+      // stamp only COORD-kind placeholders on top (PDF output). This avoids
+      // the {{tag}} leakage that occurred when stamping onto a facsimile
+      // generated from a template that still contained literal token text.
       const sourceBytes = await fileStorage.read(docxOriginalKey);
       const values = doc.data as Record<string, unknown>;
       const bookmarkValues: Record<string, unknown> = {};
@@ -103,17 +109,37 @@ export const generationJobService = {
       }
       const afterBookmarks = await fillDocxBookmarks(sourceBytes, bookmarkValues);
       const filledDocx = await fillDocxWithValues(afterBookmarks, values);
-      const mimeType =
-        'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
-      const key = `generated/${doc.id}/render-${Date.now()}.docx`;
-      const saved = await fileStorage.save(filledDocx, key, mimeType);
-      generated = { key: saved.key, mimeType, size: saved.size, extension: 'docx' };
+      if (doc.format === 'DOCX') {
+        const mimeType =
+          'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+        const key = `generated/${doc.id}/render-${Date.now()}.docx`;
+        const saved = await fileStorage.save(filledDocx, key, mimeType);
+        generated = { key: saved.key, mimeType, size: saved.size, extension: 'docx' };
+      } else {
+        // Convert the *filled* DOCX (no residual {{tags}}) to PDF, then stamp
+        // visually-positioned (COORD) placeholders on top. BOOKMARK
+        // placeholders are already inlined by the DOCX fill above, so
+        // re-stamping them would double-render their values.
+        const filledPdfBytes = await convertDocxToPdf(filledDocx);
+        const coordPlaceholders = template.placeholders.filter((p) => p.kind === 'COORD');
+        const stamped = await stampPlaceholderValuesOnPdf(
+          filledPdfBytes,
+          coordPlaceholders,
+          values,
+        );
+        const key = `generated/${doc.id}/render-${Date.now()}.pdf`;
+        const saved = await fileStorage.save(stamped, key, 'application/pdf');
+        generated = {
+          key: saved.key,
+          mimeType: 'application/pdf',
+          size: saved.size,
+          extension: 'pdf',
+        };
+      }
     } else if (template.templateMode === 'PDF') {
-      // PDF output for any uploaded template (native PDF or DOCX). For DOCX
-      // templates, sourceFileKey is the empty-DOCX → PDF facsimile produced
-      // at upload by LibreOffice — stamping values onto that PDF preserves
-      // Word's exact layout, fonts, images, headers/footers, and page breaks
-      // because the canvas is never re-flowed.
+      // Native PDF template (no DOCX original). Stamp values directly onto
+      // the source PDF — there are no {{tags}} to substitute, only COORD
+      // placeholders authored via the visual editor.
       if (!template.sourceFileKey) {
         throw new AppError(500, 'PDF template has no source file', 'NO_SOURCE_FILE');
       }
