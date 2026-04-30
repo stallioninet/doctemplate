@@ -25,6 +25,13 @@ export const createApp = (): Express => {
   app.use(express.json({ limit: '1mb' }));
 
   app.get('/health', (_req, res) => res.json({ status: 'ok' }));
+  app.get('/version', (_req, res) =>
+    res.json({
+      sha: process.env.RENDER_GIT_COMMIT ?? null,
+      branch: process.env.RENDER_GIT_BRANCH ?? null,
+      service: process.env.RENDER_SERVICE_NAME ?? null,
+    }),
+  );
 
   app.use('/api/auth', authRouter);
   app.use('/api/api-keys', apiKeyRouter);
