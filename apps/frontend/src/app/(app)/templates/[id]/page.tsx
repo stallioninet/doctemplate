@@ -5,17 +5,12 @@ import { use } from 'react';
 import { useApi } from '@/lib/useApi';
 import { Card, ErrorBanner, StatusPill } from '@/components/ui';
 
+// pdfjs-dist requires browser globals (canvas, Worker) so this editor must
+// stay client-only.
 const PdfPlaceholderEditor = dynamic(
   () => import('@/components/PdfPlaceholderEditor'),
   { ssr: false, loading: () => <p className="text-sm text-slate-500">Loading editor…</p> },
 );
-
-// pdfjs-dist requires browser globals (canvas, Worker) so this view must
-// stay client-only — same reason PdfPlaceholderEditor is dynamically imported.
-const DocxBookmarkView = dynamic(() => import('@/components/DocxBookmarkView'), {
-  ssr: false,
-  loading: () => <p className="text-sm text-slate-500">Loading preview…</p>,
-});
 
 interface TemplateDetail {
   id: string;
@@ -55,14 +50,15 @@ export default function TemplateDetailPage({
       </div>
 
       {data.templateMode === 'PDF' ? (
-        // DOCX uploads use Word bookmarks (auto-detected at upload) instead
-        // of visually-placed rectangles — bookmarks survive into the .docx
-        // output verbatim, while rectangles only make sense for PDF stamping.
-        data.sourceFormat === 'DOCX' ? (
-          <DocxBookmarkView templateId={data.id} />
-        ) : (
-          <PdfPlaceholderEditor templateId={data.id} />
-        )
+        // PDF and DOCX templates share the visual editor: the user drags
+        // COORD-kind boxes onto the canvas (stamped on output). DOCX
+        // templates additionally show the text-replace + Word-bookmark
+        // controls in the sidebar so {{tag}}-style placeholders can be
+        // authored alongside positional ones.
+        <PdfPlaceholderEditor
+          templateId={data.id}
+          sourceFormat={data.sourceFormat === 'DOCX' ? 'DOCX' : 'PDF'}
+        />
       ) : (
         <HtmlTemplateView template={data} />
       )}

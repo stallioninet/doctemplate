@@ -4,9 +4,14 @@ import { useCallback, useEffect, useRef, useState, type DragEvent } from 'react'
 import { ApiError, apiFetch, apiUrl } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
 import { pdfjsLib, type PDFDocumentProxy } from '@/lib/pdfjs';
-import { Button, ErrorBanner, Input, Label } from '@/components/ui';
+import { Button, Card, ErrorBanner, Input, Label } from '@/components/ui';
 import { FieldBox, type BoxRect, type FieldShape } from '@/components/FieldBox';
 import { PdfPage, type PageSize } from '@/components/PdfPage';
+import {
+  AddPlaceholderForm,
+  BookmarkRow,
+  type BookmarkPlaceholder,
+} from '@/components/DocxBookmarkControls';
 
 const PLACEHOLDER_TYPES = ['TEXT', 'DATE', 'NUMBER'] as const;
 type PlaceholderType = (typeof PLACEHOLDER_TYPES)[number];
@@ -25,6 +30,7 @@ export interface Placeholder {
   id: string;
   name: string;
   type: PlaceholderType;
+  kind: 'COORD' | 'BOOKMARK';
   page: number;
   x: number;
   y: number;
@@ -36,11 +42,16 @@ export interface Placeholder {
 
 interface Props {
   templateId: string;
+  // When 'DOCX', also render the bookmark / text-replace controls in the
+  // right sidebar (for {{tag}} and Word-bookmark placeholders that flow with
+  // the document text). The drag-and-drop canvas always shows COORD-kind
+  // placeholders; on DOCX templates those stamp on top of the filled DOCX.
+  sourceFormat?: 'PDF' | 'DOCX';
 }
 
 const clamp = (v: number, min: number, max: number) => Math.max(min, Math.min(max, v));
 
-export default function PdfPlaceholderEditor({ templateId }: Props) {
+export default function PdfPlaceholderEditor({ templateId, sourceFormat }: Props) {
   const { session } = useAuth();
   const [pdf, setPdf] = useState<PDFDocumentProxy | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -51,6 +62,10 @@ export default function PdfPlaceholderEditor({ templateId }: Props) {
   const [busy, setBusy] = useState(false);
   // Counts every in-flight save so concurrent drag/PATCH calls don't flicker.
   const [inflight, setInflight] = useState(0);
+  // Bumped after a successful text-replace so the PDF facsimile re-fetches
+  // (the source .docx was rewritten and a new facsimile generated). Only
+  // relevant for DOCX templates; harmless otherwise.
+  const [pdfReloadKey, setPdfReloadKey] = useState(0);
 
   const tracked = useCallback(async <T,>(fn: () => Promise<T>): Promise<T> => {
     setInflight((c) => c + 1);
@@ -61,7 +76,9 @@ export default function PdfPlaceholderEditor({ templateId }: Props) {
     }
   }, []);
 
-  // Load source PDF
+  // Load source PDF. For DOCX templates the URL is cache-busted by
+  // pdfReloadKey so a successful text-replace (which rewrites the .docx and
+  // regenerates the facsimile server-side) shows the updated preview.
   useEffect(() => {
     if (!session) return;
     let cancelled = false;
@@ -69,7 +86,8 @@ export default function PdfPlaceholderEditor({ templateId }: Props) {
     setPdf(null);
     (async () => {
       try {
-        const res = await fetch(apiUrl(`/api/templates/${templateId}/file`), {
+        const url = apiUrl(`/api/templates/${templateId}/file`) + `?v=${pdfReloadKey}`;
+        const res = await fetch(url, {
           headers: { Authorization: `Bearer ${session.token}` },
         });
         if (!res.ok) throw new Error(`PDF fetch failed (${res.status})`);
@@ -88,7 +106,7 @@ export default function PdfPlaceholderEditor({ templateId }: Props) {
     return () => {
       cancelled = true;
     };
-  }, [templateId, session?.token]);
+  }, [templateId, session?.token, pdfReloadKey]);
 
   // Load placeholders
   const loadPlaceholders = useCallback(async () => {
@@ -226,9 +244,22 @@ export default function PdfPlaceholderEditor({ templateId }: Props) {
   if (!pdf) return <p className="text-sm text-slate-500">Loading PDF…</p>;
 
   const numPages = pdf.numPages;
-  const selected = placeholders.find((p) => p.id === selectedId) ?? null;
+  // BOOKMARK placeholders flow with the document text (no x/y/w/h) and must
+  // not be rendered as canvas boxes — the saved zeros would draw a 0×0 box at
+  // (0,0). Only COORD placeholders belong on the visual canvas.
+  const coordPlaceholders = placeholders.filter((p) => p.kind === 'COORD');
+  const bookmarkPlaceholders = placeholders.filter((p) => p.kind === 'BOOKMARK');
+  const selected =
+    coordPlaceholders.find((p) => p.id === selectedId) ?? null;
   const status: SaveState =
     inflight > 0 ? 'saving' : actionError ? 'error' : 'saved';
+
+  const onTextReplaced = () => {
+    // After a successful text-replace, refresh the placeholder list and
+    // re-fetch the regenerated PDF facsimile so the preview matches.
+    setPdfReloadKey((v) => v + 1);
+    loadPlaceholders();
+  };
 
   return (
     <div className="space-y-4">
@@ -239,7 +270,7 @@ export default function PdfPlaceholderEditor({ templateId }: Props) {
           <ErrorBanner message={actionError} />
         <div className="space-y-6" onPointerDown={() => setSelectedId(null)}>
           {Array.from({ length: numPages }, (_, i) => i + 1).map((pageNum) => {
-            const onPage = placeholders.filter((p) => p.page === pageNum);
+            const onPageCoord = coordPlaceholders.filter((p) => p.page === pageNum);
             const size = pageSizes[pageNum];
             return (
               <div key={pageNum}>
@@ -259,7 +290,7 @@ export default function PdfPlaceholderEditor({ templateId }: Props) {
                   onDrop={onDropOnPage(pageNum)}
                 >
                   {size &&
-                    onPage.map((p) => (
+                    onPageCoord.map((p) => (
                       <FieldBox
                         key={p.id}
                         field={
@@ -298,6 +329,37 @@ export default function PdfPlaceholderEditor({ templateId }: Props) {
             onUpdate={(patch) => selected && onUpdate(selected.id, patch)}
             onDelete={() => selected && onDelete(selected.id)}
           />
+          {sourceFormat === 'DOCX' && (
+            <Card>
+              <h3 className="text-sm font-semibold uppercase tracking-wide text-slate-500">
+                Text-flow placeholders
+              </h3>
+              <p className="mt-1 text-xs text-slate-500">
+                For values that flow with the document text (filled in their
+                natural position by Word). The drag-and-drop boxes above are
+                stamped on top of the rendered page.
+              </p>
+              <div className="mt-3">
+                <AddPlaceholderForm
+                  templateId={templateId}
+                  onSuccess={onTextReplaced}
+                />
+              </div>
+              {bookmarkPlaceholders.length > 0 && (
+                <div className="mt-3 space-y-3">
+                  {bookmarkPlaceholders.map((p) => (
+                    <BookmarkRow
+                      key={p.id}
+                      item={p as unknown as BookmarkPlaceholder}
+                      onUpdate={(patch) =>
+                        onUpdate(p.id, patch as Partial<Placeholder>)
+                      }
+                    />
+                  ))}
+                </div>
+              )}
+            </Card>
+          )}
         </div>
       </div>
     </div>
