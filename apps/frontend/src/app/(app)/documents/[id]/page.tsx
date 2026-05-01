@@ -1,7 +1,7 @@
 'use client';
 
 import dynamic from 'next/dynamic';
-import { use, useState, type FormEvent } from 'react';
+import { use, useEffect, useState, type FormEvent } from 'react';
 import { ApiError, apiFetch, downloadAuthedFile } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
 import { useApi } from '@/lib/useApi';
@@ -109,6 +109,21 @@ export default function DocumentDetailPage({
     jobs.reload();
   };
 
+  // The generate endpoint returns 202 and the worker finishes asynchronously.
+  // Poll the document + jobs while any job is still PENDING or PROCESSING so
+  // the download buttons enable themselves the moment the worker is done.
+  const hasActiveJob = (jobs.data ?? []).some(
+    (j) => j.status === 'PENDING' || j.status === 'PROCESSING',
+  );
+  useEffect(() => {
+    if (!hasActiveJob) return;
+    const interval = setInterval(() => {
+      doc.reload();
+      jobs.reload();
+    }, 2000);
+    return () => clearInterval(interval);
+  }, [hasActiveJob, doc.reload, jobs.reload]);
+
   const runAction = async (path: string, method: 'POST') => {
     if (!session) return;
     setActing(true);
@@ -156,11 +171,16 @@ export default function DocumentDetailPage({
       </div>
 
       <Card>
-        <h2 className="text-lg font-semibold">Actions</h2>
+        <div className="flex items-center gap-3">
+          <h2 className="text-lg font-semibold">Actions</h2>
+          {hasActiveJob && (
+            <span className="text-xs text-slate-500">Generating…</span>
+          )}
+        </div>
         <ErrorBanner message={actionError} />
         <div className="mt-3 flex flex-wrap gap-2">
           <Button
-            disabled={acting}
+            disabled={acting || hasActiveJob}
             onClick={() => runAction(`/api/documents/${id}/generate`, 'POST')}
           >
             {d.fileKey ? 'Re-generate' : 'Generate'}
