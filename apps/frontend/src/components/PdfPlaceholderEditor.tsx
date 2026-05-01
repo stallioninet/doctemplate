@@ -326,7 +326,7 @@ export default function PdfPlaceholderEditor({ templateId, sourceFormat }: Props
             selected={selected}
             numPages={numPages}
             busy={busy}
-            onUpdate={(patch) => selected && onUpdate(selected.id, patch)}
+            onUpdateById={(id, patch) => onUpdate(id, patch)}
             onDelete={() => selected && onDelete(selected.id)}
           />
           {sourceFormat === 'DOCX' && (
@@ -441,13 +441,13 @@ function PlaceholderDetails({
   selected,
   numPages,
   busy,
-  onUpdate,
+  onUpdateById,
   onDelete,
 }: {
   selected: Placeholder | null;
   numPages: number;
   busy: boolean;
-  onUpdate: (patch: Partial<Placeholder>) => void;
+  onUpdateById: (id: string, patch: Partial<Placeholder>) => void;
   onDelete: () => void;
 }) {
   // Controlled drafts so a pending text edit isn't lost when the user clicks
@@ -457,26 +457,40 @@ function PlaceholderDetails({
   const draftsRef = useRef({ name: nameDraft, def: defaultDraft });
   draftsRef.current = { name: nameDraft, def: defaultDraft };
   const prevSelected = useRef(selected);
+  // Tracks which placeholder/draft pair has already been flushed (by id+value)
+  // so the selection-change effect doesn't re-fire a patch the input's onBlur
+  // already sent.
+  const flushedRef = useRef<{ id: string; name: string; def: string } | null>(null);
 
   // Flush pending edits when switching selection, then load the new selection's
-  // values. Without the flush, the in-progress rename is silently dropped.
+  // values. Critically, the flush targets `prev.id` explicitly — not the
+  // current `selected` — otherwise the in-progress rename of the previous
+  // placeholder would be applied to the newly clicked one.
   useEffect(() => {
     const prev = prevSelected.current;
     if (prev && prev.id !== selected?.id) {
       const { name, def } = draftsRef.current;
-      const patch: Partial<Placeholder> = {};
-      if (name !== prev.name) patch.name = name;
-      if (def !== (prev.defaultValue ?? '')) patch.defaultValue = def || undefined;
-      if (Object.keys(patch).length > 0) {
-        // Fire-and-forget — onUpdate handles errors via the toolbar status pill.
-        onUpdate(patch);
+      const flushed = flushedRef.current;
+      const alreadyFlushed =
+        !!flushed &&
+        flushed.id === prev.id &&
+        flushed.name === name &&
+        flushed.def === def;
+      if (!alreadyFlushed) {
+        const patch: Partial<Placeholder> = {};
+        if (name !== prev.name) patch.name = name;
+        if (def !== (prev.defaultValue ?? '')) patch.defaultValue = def || undefined;
+        if (Object.keys(patch).length > 0) {
+          onUpdateById(prev.id, patch);
+        }
       }
     }
     setNameDraft(selected?.name ?? '');
     setDefaultDraft(selected?.defaultValue ?? '');
     prevSelected.current = selected;
-    // onUpdate is stable per render but referentially new each time; ref-flush
-    // logic above means we only need to react to selection changes.
+    flushedRef.current = null;
+    // onUpdateById is stable per render but referentially new each time; ref-
+    // flush logic above means we only need to react to selection changes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selected?.id]);
 
@@ -485,13 +499,24 @@ function PlaceholderDetails({
     (nameDraft !== selected.name ||
       defaultDraft !== (selected.defaultValue ?? ''));
 
+  const markFlushed = (id: string) => {
+    flushedRef.current = {
+      id,
+      name: draftsRef.current.name,
+      def: draftsRef.current.def,
+    };
+  };
+
   const applyDrafts = () => {
     if (!selected) return;
     const patch: Partial<Placeholder> = {};
     if (nameDraft !== selected.name) patch.name = nameDraft;
     if (defaultDraft !== (selected.defaultValue ?? ''))
       patch.defaultValue = defaultDraft || undefined;
-    if (Object.keys(patch).length > 0) onUpdate(patch);
+    if (Object.keys(patch).length > 0) {
+      onUpdateById(selected.id, patch);
+      markFlushed(selected.id);
+    }
   };
 
   return (
@@ -512,7 +537,12 @@ function PlaceholderDetails({
               id="sb-ph-name"
               value={nameDraft}
               onChange={(e) => setNameDraft(e.target.value)}
-              onBlur={() => nameDraft !== selected.name && onUpdate({ name: nameDraft })}
+              onBlur={() => {
+                if (nameDraft !== selected.name) {
+                  onUpdateById(selected.id, { name: nameDraft });
+                  markFlushed(selected.id);
+                }
+              }}
               onKeyDown={(e) => {
                 if (e.key === 'Enter') {
                   e.preventDefault();
@@ -526,7 +556,9 @@ function PlaceholderDetails({
             <select
               id="sb-ph-type"
               value={selected.type}
-              onChange={(e) => onUpdate({ type: e.target.value as PlaceholderType })}
+              onChange={(e) =>
+                onUpdateById(selected.id, { type: e.target.value as PlaceholderType })
+              }
               className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm"
             >
               {PLACEHOLDER_TYPES.map((t) => (
@@ -541,7 +573,9 @@ function PlaceholderDetails({
             <select
               id="sb-ph-page"
               value={selected.page}
-              onChange={(e) => onUpdate({ page: Number(e.target.value) })}
+              onChange={(e) =>
+                onUpdateById(selected.id, { page: Number(e.target.value) })
+              }
               className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm"
             >
               {Array.from({ length: numPages }, (_, i) => i + 1).map((p) => (
@@ -556,7 +590,9 @@ function PlaceholderDetails({
             <select
               id="sb-ph-required"
               value={selected.required ? '1' : '0'}
-              onChange={(e) => onUpdate({ required: e.target.value === '1' })}
+              onChange={(e) =>
+                onUpdateById(selected.id, { required: e.target.value === '1' })
+              }
               className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm"
             >
               <option value="1">Yes</option>
@@ -569,10 +605,14 @@ function PlaceholderDetails({
               id="sb-ph-default"
               value={defaultDraft}
               onChange={(e) => setDefaultDraft(e.target.value)}
-              onBlur={() =>
-                defaultDraft !== (selected.defaultValue ?? '') &&
-                onUpdate({ defaultValue: defaultDraft || undefined })
-              }
+              onBlur={() => {
+                if (defaultDraft !== (selected.defaultValue ?? '')) {
+                  onUpdateById(selected.id, {
+                    defaultValue: defaultDraft || undefined,
+                  });
+                  markFlushed(selected.id);
+                }
+              }}
               onKeyDown={(e) => {
                 if (e.key === 'Enter') {
                   e.preventDefault();
