@@ -4,11 +4,17 @@ import { PlaceholderKind, PlaceholderType } from '@prisma/client';
 const coord = z.number().min(0).max(1000);
 
 export const createPlaceholderSchema = z.object({
+  // Human-readable label. COORD placeholders use this purely as a UI caption
+  // for the box on the canvas, so any printable text is fine. BOOKMARK names
+  // do feed docxtemplater's tag substitution via {{…}}; for that path the
+  // frontend slugifies before submitting (see AddPlaceholderForm), so the
+  // schema only needs to reject characters that would break the delimiters.
   name: z
     .string()
+    .trim()
     .min(1)
-    .max(120)
-    .regex(/^[A-Za-z_][A-Za-z0-9_.\-]*$/, 'Use letters, digits, dot, dash or underscore'),
+    .max(200)
+    .regex(/^[^{}]+$/, 'Name must not contain { or }'),
   type: z.nativeEnum(PlaceholderType).default(PlaceholderType.TEXT),
   // Bookmark-mode placeholders are name-only (the position is whatever the
   // Word bookmark spans). Coordinates default to 0 since they're meaningless
